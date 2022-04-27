@@ -1,0 +1,56 @@
+name: CI
+on:
+  push:
+    branches:
+      - "master"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: golangci/golangci-lint-action@v2
+  build:
+    runs-on: ${{ matrix.os }}
+    needs: lint
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-go@v2
+        with:
+          go-version: 1.17
+      - run: go build ./cmd/files-updater-regex/
+      - run: go test -v ./...
+  release:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-go@v2
+        with:
+          go-version: 1.17
+      - run: |
+          go install github.com/mitchellh/gox@latest
+          go install github.com/tcnksm/ghr@latest
+      - uses: go-semantic-release/action@v1
+        id: semrel
+        with:
+          allow-initial-development-versions: true
+          force-bump-patch-version: true
+          changelog-file: CHANGELOG.md
+          changelog-generator-opt: "emojis=true"
+          github-token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+          ghr: true
+      - run: |
+          gox -parallel 4 -osarch="linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 linux/arm windows/amd64" -ldflags="-extldflags '-static' -s -w -X github.com/a5r0n/files-updater-regex/pkg/updater.FUVERSION=${{steps.semrel.outputs.version}}" -output="bin/{{.Dir}}_v${{steps.semrel.outputs.version}}_{{.OS}}_{{.Arch}}" ./cmd/files-updater-regex/
+          cd bin/ && shasum -a 256 * > ./files-updater-regex_v${{steps.semrel.outputs.version}}_checksums.txt && cd -
+        if: steps.semrel.outputs.version != ''
+        env:
+          CGO_ENABLED: 0
+      - run: ghr $(cat .ghr) bin/
+        if: steps.semrel.outputs.version != ''
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
